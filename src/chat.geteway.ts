@@ -1,11 +1,12 @@
-import { MessageBody,SubscribeMessage, WebSocketGateway,WebSocketServer,OnGatewayConnection} from "@nestjs/websockets";
+import { MessageBody,SubscribeMessage, WebSocketGateway,WebSocketServer, OnGatewayDisconnect} from "@nestjs/websockets";
 import { Server, Socket } from 'socket.io';
 
 @WebSocketGateway()
-export class ChatGeteway implements OnGatewayConnection { 
+export class ChatGeteway implements OnGatewayDisconnect { 
     @WebSocketServer()
     server;
-    async handleConnection(socket: Socket) {
+
+    async handleDisconnect(socket: Socket){
     }
 
     @SubscribeMessage("CREATE_ROOM")
@@ -17,15 +18,18 @@ export class ChatGeteway implements OnGatewayConnection {
     @SubscribeMessage("GET_CONNECTED_SOCKETS")
     getRoomSockets(socket: Socket,message:any){
       const roomSockets = [];
-      this.server.sockets.adapter.rooms.get(message.roomId).forEach(socket => {
-        roomSockets.push(socket)
-      });
-      this.server.emit("ROOM_SOCKETS",{roomSockets})
+      const {rooms} = this.server.sockets.adapter; 
+      if(rooms.get(message.roomId)){
+        rooms.get(message.roomId).forEach(socket => {
+          roomSockets.push(socket)
+        });
+        this.server.to(message.roomId).emit("ROOM_SOCKETS",{roomSockets})
+      }
     }
     
     @SubscribeMessage("LEAVE_ROOM")
     leaveRoom(socket: Socket,message:any){
-      socket.leave(message.id);
+      socket.leave(message.roomId);
       this.getRoomSockets(socket,message);
     }
 
@@ -43,7 +47,6 @@ export class ChatGeteway implements OnGatewayConnection {
             rooms.push(entry[0])
           }
         }
-        console.log(rooms)
         
         this.server.emit("ROOM_LIST",{rooms})
     }
