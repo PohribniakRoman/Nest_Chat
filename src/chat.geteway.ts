@@ -1,4 +1,5 @@
 import { MessageBody,SubscribeMessage, WebSocketGateway,WebSocketServer, OnGatewayDisconnect} from "@nestjs/websockets";
+import e from "express";
 import { Server, Socket } from 'socket.io';
 
 const DB = {};
@@ -6,8 +7,8 @@ const DB = {};
 class Chat {
   participants:object;
   messages:object;
-  constructor(participant){
-    this.participants = [participant];
+  constructor(participant,socket){
+    this.participants = [{participant,socket:[socket]}];
     this.messages = [];
   }
 }
@@ -17,8 +18,30 @@ export class ChatGeteway implements OnGatewayDisconnect {
     @WebSocketServer()
     server;
 
-    async handleDisconnect(socket: Socket){
-    }
+    handleDisconnect(socket:Socket){
+        const rooms = Object.keys(DB);
+        for(let roomId of rooms){
+          const room = DB[roomId]; 
+          const {length} = room.participants;
+
+          for (let i = 0; i < length; i++) {
+            if(room.participants[i].socket.includes(socket.id)){
+              const indx = room.participants[i].socket.indexOf(socket.id);
+              
+              if(room.participants[i].socket.length > 1){
+                room.participants[i].socket.splice(indx-1,1);
+              }else{
+                room.participants.splice(i-1,1)
+                
+                if(room.participants.length === 0){
+                  delete DB[roomId];
+                }
+              }
+            }
+          }
+        }
+        this.sendRooms();
+      }
 
     getSockets(roomId:string){
       const roomSockets = [];
@@ -31,19 +54,34 @@ export class ChatGeteway implements OnGatewayDisconnect {
       return roomSockets;
     }
 
-    createDBRoom(message:any){
-      if(!DB[message.roomId]){
-        DB[message.roomId] = new Chat(message.participant);
+    createDBRoom(socket,data:any){
+      if(!DB[data.roomId]){
+        DB[data.roomId] = new Chat(data.participant,socket.id);
         return true;
       }
       return false;
     }
 
-    joinDBRoom(message:any){
-      if(!DB[message.roomId].participants.includes(message.participant)){
-        DB[message.roomId].participants.push(message.participant)
+    joinDBRoom(socket:Socket,data:any):boolean{
+      if(DB[data.roomId]){
+        const room = DB[data.roomId];
+        const {length} = room.participants;
+        
+          for (let i = 0; i < length; i++) {
+            if(room.participants[i].socket.includes(socket.id)){
+              return false
+            };
+            if(room.participants[i].participant === data.participant){
+                room.participants[i].socket.push(socket.id);
+                return true;
+            }
+          }
+          DB[data.roomId].participants.push({participant:data.participant,socket:[socket.id]});
+          return true;
+        }else{
+          return false;
+        }
       }
-    }
 
     getRoomHistory({roomId}){
       return DB[roomId].messages;
@@ -54,52 +92,49 @@ export class ChatGeteway implements OnGatewayDisconnect {
     }
 
     @SubscribeMessage("MESSAGE")
-    sendMessage(socket:Socket,message:any){
-      this.newDBMessage(message);
-      this.server.to(message.roomId).emit("NEW_MESSAGE",{txt:message.txt,sender:message.sender});
+    sendMessage(socket:Socket,data:any){
+      this.newDBMessage(data);
+      this.server.to(data.roomId).emit("NEW_MESSAGE",{txt:data.txt,sender:data.sender});
     }
 
     @SubscribeMessage("CREATE_ROOM")
-    createRoom(socket: Socket,message:any){
-      if(this.createDBRoom(message)){
-        this.enterRoom(socket,message);
+    createRoom(socket: Socket,data:any){
+      if(this.createDBRoom(socket,data)){
+        this.enterRoom(socket,data);
         this.sendRooms();
       }
     }
     
     @SubscribeMessage("GET_CONNECTED_SOCKETS")
-    sendUsers(socket: Socket,message:any){
-        this.server.to(message.roomId).emit("ROOM_SOCKETS",{roomParticipants:DB[message.roomId].participants})
+    sendUsers(data:any){
+      if(DB[data.roomId]){
+        this.server.to(data.roomId).emit("ROOM_SOCKETS",{roomParticipants:DB[data.roomId].participants.map(data=>{return data.participant})})
+      }
     }
     
     @SubscribeMessage("LEAVE_ROOM")
-    leaveRoom(socket: Socket,message:any){
-      socket.leave(message.roomId);
-      this.sendUsers(socket,message);
+    leaveRoom(socket: Socket,data:any){
+      
+      socket.leave(data.roomId);
+      this.handleDisconnect(socket);
+      this.sendUsers(data);
     }
 
     @SubscribeMessage("ENTER_ROOM")
-    enterRoom(socket: Socket,message:any){
-        this.createDBRoom(message)
-        this.joinDBRoom(message);
-        socket.join(message.roomId);
-        socket.to(socket.id).emit("MESSAGE_HISTORY",this.getRoomHistory(message))
+    enterRoom(socket: Socket,data:any){
+        this.createDBRoom(socket,data);
+        this.joinDBRoom(socket,data);
+        socket.join(data.roomId);
+        this.server.to(socket.id).emit("MESSAGE_HISTORY",this.getRoomHistory(data))
+        this.sendUsers(data);
         this.sendRooms();
     }
     
     @SubscribeMessage("GET_ROOMS")
     sendRooms(): any{
-        const rooms = [];
-        for (let entry of this.server.sockets.adapter.rooms.entries()){
-          if(entry[0].length != 20){
-            rooms.push({
-              id:entry[0],
-              sockets:this.getSockets(entry[0]),
-            })
-          }
-        }
-        
-        this.server.emit("ROOM_LIST",{rooms})
+        this.server.emit("ROOM_LIST",{rooms:Object.keys(DB).map(roomId=>{
+          return {id:roomId,sockets:DB[roomId].participants}
+        })})
     }
 }
 
