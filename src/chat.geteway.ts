@@ -96,14 +96,6 @@ export class ChatGeteway implements OnGatewayDisconnect {
       this.newDBMessage(data);
       this.server.to(data.roomId).emit("NEW_MESSAGE",{txt:data.txt,sender:data.sender});
     }
-
-    @SubscribeMessage("CREATE_ROOM")
-    createRoom(socket: Socket,data:any){
-      if(this.createDBRoom(socket,data)){
-        this.enterRoom(socket,data);
-        this.sendRooms();
-      }
-    }
     
     @SubscribeMessage("GET_CONNECTED_SOCKETS")
     sendUsers(data:any){
